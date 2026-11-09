@@ -1,0 +1,30 @@
+# Copy to config.yaml and fill in real values. Do not commit secrets.
+#
+# Create API keys in each app: Settings → API → API Keys, then enable them
+# on every sync endpoint (Authentication → API Key).
+# See https://docs.bobuild.com/advanced/api/
+#
+# Optional host/port: dial this TCP address instead of domain (cluster ingress),
+# keep domain for the HTTP Host header, disable TLS.
+#
+# Each job has its own source, tables (FK order), and targets.
+# Failures on one job/table/target do not block the others.
+
+jobs:
+  - name: catalog
+    tables:
+      - category
+      - product
+    source:
+      domain: source.example.com
+      api_key: "REPLACE_ME"
+      path_prefix: /sync
+    targets:
+      - domain: replica.example.com
+        api_key: "REPLACE_ME"
+        path_prefix: /sync
+      - domain: other-replica.example.com
+        api_key: "REPLACE_ME"
+        path_prefix: /sync
+        # host: ingress.internal
+        # port: "80"
