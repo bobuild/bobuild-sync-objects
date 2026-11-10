@@ -79,8 +79,21 @@ func createRecord(c *bobuild.Client, endpoint string, payload map[string]any) er
 	return doWrite(c, http.MethodPost, endpoint, payload)
 }
 
+// payloadWithoutID copies payload omitting id. Modify endpoints take the
+// record id from the URL path and reject id in the JSON body ("Unexpected keys").
+func payloadWithoutID(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if k == "id" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func modifyRecord(c *bobuild.Client, endpoint string, payload map[string]any) error {
-	return doWrite(c, http.MethodPatch, endpoint, payload)
+	return doWrite(c, http.MethodPatch, endpoint, payloadWithoutID(payload))
 }
 
 func deleteRecord(c *bobuild.Client, endpoint string) error {

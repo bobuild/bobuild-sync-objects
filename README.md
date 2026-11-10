@@ -45,7 +45,7 @@ Pick a path prefix per app (e.g. `/sync`). For every table name `T` in the job:
 | Target | `{prefix}/T/{id}` | Modify | `PATCH` |
 | Target | `{prefix}/T/{id}` | Delete | `DELETE` |
 
-Configure the same set of API variables on source list and target list/create/modify so payloads round-trip.
+Configure the same set of API variables on source list and target list/create/modify so payloads round-trip. On **Modify**, do **not** map `id` — Bobuild takes it from the URL path and rejects `id` in the body; this tool strips `id` from PATCH payloads automatically.
 
 **Preserve IDs:** map `id` as an accepted field on the target **Create** endpoint so replicas keep the source primary key. Without that, creates get new IDs and the sync cannot match rows.
 

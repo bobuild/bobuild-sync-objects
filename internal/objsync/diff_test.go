@@ -48,3 +48,17 @@ func TestIndexByID(t *testing.T) {
 		t.Fatalf("byID=%d invalid=%d", len(byID), len(invalid))
 	}
 }
+
+func TestPayloadWithoutID(t *testing.T) {
+	in := map[string]any{"id": float64(1), "nome": "x", "attivo": true}
+	out := payloadWithoutID(in)
+	if _, ok := out["id"]; ok {
+		t.Fatal("id should be omitted")
+	}
+	if out["nome"] != "x" || out["attivo"] != true {
+		t.Fatalf("fields lost: %#v", out)
+	}
+	if _, ok := in["id"]; !ok {
+		t.Fatal("input must not be mutated")
+	}
+}
