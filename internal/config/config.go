@@ -3,10 +3,14 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// envAPIKeyRef matches an api_key whose entire value is ${ENV_VAR}.
+var envAPIKeyRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
 // App identifies a Bobuild app and how to reach its API.
 type App struct {
@@ -96,6 +100,11 @@ func validateApp(label string, a *App) error {
 	if a.Domain == "" || a.APIKey == "" {
 		return fmt.Errorf("%s: domain and api_key are required", label)
 	}
+	resolved, err := resolveAPIKey(label, a.APIKey)
+	if err != nil {
+		return err
+	}
+	a.APIKey = resolved
 	if a.PathPrefix == "" {
 		return fmt.Errorf("%s: path_prefix is required", label)
 	}
@@ -110,6 +119,21 @@ func validateApp(label string, a *App) error {
 		a.Port = "80"
 	}
 	return nil
+}
+
+// resolveAPIKey expands api_key when the whole value is ${ENV_VAR}.
+// Non-matching values (including $FOO or prefix${FOO}) are returned unchanged.
+func resolveAPIKey(label, value string) (string, error) {
+	m := envAPIKeyRef.FindStringSubmatch(value)
+	if m == nil {
+		return value, nil
+	}
+	name := m[1]
+	v, ok := os.LookupEnv(name)
+	if !ok || v == "" {
+		return "", fmt.Errorf("%s: environment variable %q is unset or empty", label, name)
+	}
+	return v, nil
 }
 
 // EndpointPath joins path_prefix and table name: /prefix/table.

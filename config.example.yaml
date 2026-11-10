@@ -4,8 +4,8 @@
 # on every sync endpoint (Authentication → API Key).
 # See https://docs.bobuild.com/advanced/api/
 #
-# Optional host/port: dial this TCP address instead of domain (cluster ingress),
-# keep domain for the HTTP Host header, disable TLS.
+# api_key may be a literal string or ${ENV_VAR} (whole value). Use one env
+# var per key; inject from Secrets Manager / SSM / ECS secrets in production.
 #
 # Each job has its own source, tables (FK order), and targets.
 # Failures on one job/table/target do not block the others.
@@ -17,14 +17,13 @@ jobs:
       - product
     source:
       domain: source.example.com
-      api_key: "REPLACE_ME"
+      api_key: ${SYNC_SOURCE_KEY}
       path_prefix: /sync
     targets:
       - domain: replica.example.com
-        api_key: "REPLACE_ME"
+        api_key: ${SYNC_REPLICA_KEY}
         path_prefix: /sync
       - domain: other-replica.example.com
-        api_key: "REPLACE_ME"
+        api_key: "REPLACE_ME" # literal also fine for local use
         path_prefix: /sync
-        # host: ingress.internal
-        # port: "80"
+

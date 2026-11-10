@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -122,5 +123,112 @@ func TestEndpointPaths(t *testing.T) {
 	}
 	if got := RecordPath("/sync", "product", 42); got != "/sync/product/42" {
 		t.Fatalf("RecordPath: %q", got)
+	}
+}
+
+func TestLoadExpandsAPIKeyEnv(t *testing.T) {
+	t.Setenv("BOBUILD_SYNC_TEST_SRC", "secret-src")
+	t.Setenv("BOBUILD_SYNC_TEST_DST", "secret-dst")
+	path := writeConfig(t, `
+jobs:
+  - name: catalog
+    tables: [t]
+    source:
+      domain: source.example.com
+      api_key: ${BOBUILD_SYNC_TEST_SRC}
+      path_prefix: /sync
+    targets:
+      - domain: replica.example.com
+        api_key: ${BOBUILD_SYNC_TEST_DST}
+        path_prefix: /sync
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Jobs[0].Source.APIKey != "secret-src" {
+		t.Fatalf("source api_key: %q", cfg.Jobs[0].Source.APIKey)
+	}
+	if cfg.Jobs[0].Targets[0].APIKey != "secret-dst" {
+		t.Fatalf("target api_key: %q", cfg.Jobs[0].Targets[0].APIKey)
+	}
+}
+
+func TestLoadAPIKeyEnvUnsetOrEmpty(t *testing.T) {
+	t.Setenv("BOBUILD_SYNC_TEST_EMPTY", "")
+	path := writeConfig(t, `
+jobs:
+  - name: catalog
+    tables: [t]
+    source:
+      domain: source.example.com
+      api_key: ${BOBUILD_SYNC_TEST_MISSING}
+      path_prefix: /sync
+    targets:
+      - domain: replica.example.com
+        api_key: k
+        path_prefix: /sync
+`)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `environment variable "BOBUILD_SYNC_TEST_MISSING" is unset or empty`) {
+		t.Fatalf("expected unset env error, got %v", err)
+	}
+
+	path = writeConfig(t, `
+jobs:
+  - name: catalog
+    tables: [t]
+    source:
+      domain: source.example.com
+      api_key: ${BOBUILD_SYNC_TEST_EMPTY}
+      path_prefix: /sync
+    targets:
+      - domain: replica.example.com
+        api_key: k
+        path_prefix: /sync
+`)
+	_, err = Load(path)
+	if err == nil || !strings.Contains(err.Error(), `environment variable "BOBUILD_SYNC_TEST_EMPTY" is unset or empty`) {
+		t.Fatalf("expected empty env error, got %v", err)
+	}
+}
+
+func TestLoadAPIKeyLiteralAndNonMatching(t *testing.T) {
+	t.Setenv("BOBUILD_SYNC_TEST_FOO", "should-not-expand")
+	path := writeConfig(t, `
+jobs:
+  - name: catalog
+    tables: [t]
+    source:
+      domain: source.example.com
+      api_key: plain-key
+      path_prefix: /sync
+    targets:
+      - domain: a.example.com
+        api_key: $BOBUILD_SYNC_TEST_FOO
+        path_prefix: /sync
+      - domain: b.example.com
+        api_key: ${BOBUILD_SYNC_TEST_FOO}bar
+        path_prefix: /sync
+      - domain: c.example.com
+        api_key: prefix${BOBUILD_SYNC_TEST_FOO}
+        path_prefix: /sync
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := cfg.Jobs[0]
+	if job.Source.APIKey != "plain-key" {
+		t.Fatalf("literal: %q", job.Source.APIKey)
+	}
+	if job.Targets[0].APIKey != "$BOBUILD_SYNC_TEST_FOO" {
+		t.Fatalf("$FOO form: %q", job.Targets[0].APIKey)
+	}
+	if job.Targets[1].APIKey != "${BOBUILD_SYNC_TEST_FOO}bar" {
+		t.Fatalf("suffix form: %q", job.Targets[1].APIKey)
+	}
+	if job.Targets[2].APIKey != "prefix${BOBUILD_SYNC_TEST_FOO}" {
+		t.Fatalf("prefix form: %q", job.Targets[2].APIKey)
 	}
 }
