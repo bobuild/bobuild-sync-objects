@@ -84,7 +84,9 @@ jobs:
 
 `api_key` may be a literal string (fine for local use) or `${ENV_VAR}` as the whole value. Each key can use its own env var name. Unset or empty variables fail at startup with a clear error. In containers (e.g. AWS ECS/Fargate), inject secrets as environment variables from Secrets Manager or SSM — one env var per API key referenced in the config.
 
-Optional per app: `host` / `port` to dial a cluster ingress over plain HTTP while keeping `domain` as the HTTP Host (default port `80` if only `host` is set).
+Optional per app:
+- `host` / `port` — dial a cluster ingress over plain HTTP while keeping `domain` as the HTTP Host (default port `80` if only `host` is set)
+- `insecure_skip_verify: true` — skip TLS certificate verification (private CA / broken chain). Prefer fixing trust store; only enable for known endpoints
 
 ## Usage
 

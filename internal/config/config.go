@@ -22,6 +22,9 @@ type App struct {
 	// and keeps Domain for the request Host / URL.
 	Host string `yaml:"host"`
 	Port string `yaml:"port"`
+	// InsecureSkipVerify disables TLS certificate verification for this app.
+	// Use only for trusted internal/dev endpoints with private CAs.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
 // Job is one sync pipeline: tables from a source app into one or more targets.

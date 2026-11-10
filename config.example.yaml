@@ -19,6 +19,7 @@ jobs:
       domain: source.example.com
       api_key: ${SYNC_SOURCE_KEY}
       path_prefix: /sync
+      # insecure_skip_verify: true  # only if TLS cert is untrusted (private CA)
     targets:
       - domain: replica.example.com
         api_key: ${SYNC_REPLICA_KEY}
@@ -26,4 +27,6 @@ jobs:
       - domain: other-replica.example.com
         api_key: "REPLACE_ME" # literal also fine for local use
         path_prefix: /sync
+        # host: ingress.internal
+        # port: "80"
 
