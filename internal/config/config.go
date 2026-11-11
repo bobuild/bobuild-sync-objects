@@ -12,6 +12,9 @@ import (
 // envAPIKeyRef matches an api_key whose entire value is ${ENV_VAR}.
 var envAPIKeyRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
+// DefaultMaxFileSizeMB is used when max_file_size_mb is omitted or zero.
+const DefaultMaxFileSizeMB = 100
+
 // App identifies a Bobuild app and how to reach its API.
 type App struct {
 	Domain     string `yaml:"domain"`
@@ -27,16 +30,55 @@ type App struct {
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
+// Table is one object synced in a job. YAML may be a bare string name or a
+// mapping with optional file_fields.
+type Table struct {
+	Name       string   `yaml:"name"`
+	FileFields []string `yaml:"file_fields"`
+}
+
+// UnmarshalYAML accepts either "product" or {name: product, file_fields: [...]}.
+func (t *Table) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var name string
+		if err := value.Decode(&name); err != nil {
+			return err
+		}
+		t.Name = name
+		t.FileFields = nil
+		return nil
+	case yaml.MappingNode:
+		type raw Table
+		var r raw
+		if err := value.Decode(&r); err != nil {
+			return err
+		}
+		*t = Table(r)
+		return nil
+	default:
+		return fmt.Errorf("table must be a string or a mapping with name")
+	}
+}
+
 // Job is one sync pipeline: tables from a source app into one or more targets.
 type Job struct {
-	Name    string   `yaml:"name"`
-	Tables  []string `yaml:"tables"`
-	Source  App      `yaml:"source"`
-	Targets []App    `yaml:"targets"`
+	Name    string  `yaml:"name"`
+	Tables  []Table `yaml:"tables"`
+	Source  App     `yaml:"source"`
+	Targets []App   `yaml:"targets"`
 }
 
 type Config struct {
-	Jobs []Job `yaml:"jobs"`
+	// MaxFileSizeMB caps downloaded file payloads (default 100). Oversized
+	// files skip the record to avoid container OOM.
+	MaxFileSizeMB int   `yaml:"max_file_size_mb"`
+	Jobs          []Job `yaml:"jobs"`
+}
+
+// MaxFileBytes returns the configured size cap in bytes.
+func (cfg *Config) MaxFileBytes() int64 {
+	return int64(cfg.MaxFileSizeMB) * 1024 * 1024
 }
 
 func Load(path string) (*Config, error) {
@@ -55,6 +97,12 @@ func Load(path string) (*Config, error) {
 }
 
 func (cfg *Config) validate() error {
+	if cfg.MaxFileSizeMB < 0 {
+		return fmt.Errorf("max_file_size_mb must be >= 0")
+	}
+	if cfg.MaxFileSizeMB == 0 {
+		cfg.MaxFileSizeMB = DefaultMaxFileSizeMB
+	}
 	if len(cfg.Jobs) == 0 {
 		return fmt.Errorf("at least one job is required")
 	}
@@ -72,9 +120,23 @@ func (cfg *Config) validate() error {
 		if len(job.Tables) == 0 {
 			return fmt.Errorf("%s: at least one table is required", label)
 		}
-		for j, table := range job.Tables {
-			if strings.TrimSpace(table) == "" {
-				return fmt.Errorf("%s.tables[%d]: empty table name", label, j)
+		for j := range job.Tables {
+			table := &job.Tables[j]
+			tLabel := fmt.Sprintf("%s.tables[%d]", label, j)
+			if strings.TrimSpace(table.Name) == "" {
+				return fmt.Errorf("%s: empty table name", tLabel)
+			}
+			seenFields := make(map[string]struct{}, len(table.FileFields))
+			for k, field := range table.FileFields {
+				field = strings.TrimSpace(field)
+				if field == "" {
+					return fmt.Errorf("%s.file_fields[%d]: empty field name", tLabel, k)
+				}
+				table.FileFields[k] = field
+				if _, dup := seenFields[field]; dup {
+					return fmt.Errorf("%s.file_fields: duplicate %q", tLabel, field)
+				}
+				seenFields[field] = struct{}{}
 			}
 		}
 		if err := validateApp(label+".source", &job.Source); err != nil {

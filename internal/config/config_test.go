@@ -41,11 +41,94 @@ jobs:
 	if job.Name != "catalog" || len(job.Tables) != 2 {
 		t.Fatalf("job: %+v", job)
 	}
+	if job.Tables[0].Name != "category" || job.Tables[1].Name != "product" {
+		t.Fatalf("tables: %+v", job.Tables)
+	}
+	if cfg.MaxFileSizeMB != DefaultMaxFileSizeMB {
+		t.Fatalf("default max_file_size_mb: got %d want %d", cfg.MaxFileSizeMB, DefaultMaxFileSizeMB)
+	}
 	if job.Source.PathPrefix != "/sync" {
 		t.Fatalf("trailing slash should be trimmed, got %q", job.Source.PathPrefix)
 	}
 	if job.Targets[0].PathPrefix != "/sync" {
 		t.Fatalf("target prefix: %q", job.Targets[0].PathPrefix)
+	}
+}
+
+func TestLoadTableFileFieldsAndMaxSize(t *testing.T) {
+	path := writeConfig(t, `
+max_file_size_mb: 50
+jobs:
+  - name: catalog
+    tables:
+      - category
+      - name: product
+        file_fields: [cover, datasheet]
+    source:
+      domain: source.example.com
+      api_key: "src-key"
+      path_prefix: /sync
+    targets:
+      - domain: replica.example.com
+        api_key: "dst-key"
+        path_prefix: /sync
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxFileSizeMB != 50 {
+		t.Fatalf("max_file_size_mb: %d", cfg.MaxFileSizeMB)
+	}
+	if cfg.MaxFileBytes() != 50*1024*1024 {
+		t.Fatalf("MaxFileBytes: %d", cfg.MaxFileBytes())
+	}
+	job := cfg.Jobs[0]
+	if job.Tables[0].Name != "category" || len(job.Tables[0].FileFields) != 0 {
+		t.Fatalf("category: %+v", job.Tables[0])
+	}
+	if job.Tables[1].Name != "product" {
+		t.Fatalf("product name: %+v", job.Tables[1])
+	}
+	if len(job.Tables[1].FileFields) != 2 || job.Tables[1].FileFields[0] != "cover" || job.Tables[1].FileFields[1] != "datasheet" {
+		t.Fatalf("file_fields: %+v", job.Tables[1].FileFields)
+	}
+}
+
+func TestLoadRejectsBadFileFieldsAndMaxSize(t *testing.T) {
+	cases := []string{
+		`
+max_file_size_mb: -1
+jobs:
+  - name: a
+    tables: [t]
+    source: {domain: s.example.com, api_key: k, path_prefix: /sync}
+    targets: [{domain: t.example.com, api_key: k, path_prefix: /sync}]
+`,
+		`
+jobs:
+  - name: a
+    tables:
+      - name: product
+        file_fields: [cover, cover]
+    source: {domain: s.example.com, api_key: k, path_prefix: /sync}
+    targets: [{domain: t.example.com, api_key: k, path_prefix: /sync}]
+`,
+		`
+jobs:
+  - name: a
+    tables:
+      - name: product
+        file_fields: [""]
+    source: {domain: s.example.com, api_key: k, path_prefix: /sync}
+    targets: [{domain: t.example.com, api_key: k, path_prefix: /sync}]
+`,
+	}
+	for i, content := range cases {
+		path := writeConfig(t, content)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("case %d: expected error", i)
+		}
 	}
 }
 

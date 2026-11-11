@@ -3,6 +3,7 @@ package objsync
 import (
 	"fmt"
 	"log"
+	"net/http"
 
 	bobuild "github.com/bobuild/bobuild-client-go"
 
@@ -91,23 +92,26 @@ func Run(cfg *config.Config, opts Options) ([]Stats, error) {
 		return nil, err
 	}
 
+	maxFileBytes := cfg.MaxFileBytes()
+
 	var allStats []Stats
 	var hadErrors bool
 
 	for _, job := range jobs {
 		sourceClient := newClient(job.Source)
+		fileClient := fileHTTPClient(job.Source.InsecureSkipVerify)
 		sources := make(map[string]tableSource, len(job.Tables))
 		for _, table := range job.Tables {
-			path := config.EndpointPath(job.Source.PathPrefix, table)
+			path := config.EndpointPath(job.Source.PathPrefix, table.Name)
 			log.Printf("[%s] loading source %s", job.Name, path)
 			rows, err := bobuild.GetList[map[string]any](sourceClient, path)
 			if err != nil {
 				log.Printf("[%s] ERROR GET source %s: %v", job.Name, path, err)
-				sources[table] = tableSource{err: err}
+				sources[table.Name] = tableSource{err: err}
 				continue
 			}
-			log.Printf("[%s] source %s: %d records", job.Name, table, len(rows))
-			sources[table] = tableSource{rows: rows}
+			log.Printf("[%s] source %s: %d records", job.Name, table.Name, len(rows))
+			sources[table.Name] = tableSource{rows: rows}
 		}
 
 		for _, target := range job.Targets {
@@ -115,38 +119,38 @@ func Run(cfg *config.Config, opts Options) ([]Stats, error) {
 			for _, table := range job.Tables {
 				st := &Stats{
 					Job:    job.Name,
-					Table:  table,
+					Table:  table.Name,
 					Source: job.Source.Domain,
 					Target: target.Domain,
 				}
-				statsByTable[table] = st
+				statsByTable[table.Name] = st
 
-				src := sources[table]
+				src := sources[table.Name]
 				if src.err != nil {
 					st.Errors++
 					hadErrors = true
 					continue
 				}
 				st.SourceN = len(src.rows)
-				if errN := upsertTable(job, table, src.rows, target, st, opts.DryRun); errN > 0 {
+				if errN := upsertTable(job, table, src.rows, target, st, opts.DryRun, maxFileBytes, fileClient); errN > 0 {
 					hadErrors = true
 				}
 			}
 
 			for i := len(job.Tables) - 1; i >= 0; i-- {
 				table := job.Tables[i]
-				st := statsByTable[table]
-				src := sources[table]
+				st := statsByTable[table.Name]
+				src := sources[table.Name]
 				if src.err != nil {
 					continue
 				}
-				if errN := deleteExtras(job, table, src.rows, target, st, opts.DryRun); errN > 0 {
+				if errN := deleteExtras(job, table.Name, src.rows, target, st, opts.DryRun); errN > 0 {
 					hadErrors = true
 				}
 			}
 
 			for _, table := range job.Tables {
-				allStats = append(allStats, *statsByTable[table])
+				allStats = append(allStats, *statsByTable[table.Name])
 			}
 		}
 	}
@@ -157,10 +161,10 @@ func Run(cfg *config.Config, opts Options) ([]Stats, error) {
 	return allStats, nil
 }
 
-func upsertTable(job config.Job, table string, sourceRows []map[string]any, target config.App, st *Stats, dryRun bool) int {
+func upsertTable(job config.Job, table config.Table, sourceRows []map[string]any, target config.App, st *Stats, dryRun bool, maxFileBytes int64, fileClient *http.Client) int {
 	errors := 0
 	client := newClient(target)
-	targetPath := config.EndpointPath(target.PathPrefix, table)
+	targetPath := config.EndpointPath(target.PathPrefix, table.Name)
 	log.Printf("[%s→%s] loading target %s", job.Source.Domain, target.Domain, targetPath)
 	targetRows, err := bobuild.GetList[map[string]any](client, targetPath)
 	if err != nil {
@@ -174,47 +178,107 @@ func upsertTable(job config.Job, table string, sourceRows []map[string]any, targ
 	for range invalid {
 		st.Errors++
 		errors++
-		log.Printf("[%s→%s] %s: source record without id, skipping", job.Source.Domain, target.Domain, table)
+		log.Printf("[%s→%s] %s: source record without id, skipping", job.Source.Domain, target.Domain, table.Name)
 	}
 
 	for id, row := range sourceByID {
 		existing, found := targetByID[id]
 		if !found {
 			if dryRun {
-				log.Printf("[%s→%s] dry-run: would create %s id=%d", job.Source.Domain, target.Domain, table, id)
+				log.Printf("[%s→%s] dry-run: would create %s id=%d", job.Source.Domain, target.Domain, table.Name, id)
+				for _, field := range table.FileFields {
+					if u, err := fileFieldURL(row[field]); err == nil && u != "" {
+						log.Printf("[%s→%s] dry-run: would upload %s id=%d field=%s", job.Source.Domain, target.Domain, table.Name, id, field)
+					}
+				}
 				st.Created++
 				continue
 			}
-			if err := createRecord(client, targetPath, row); err != nil {
+			if err := writeRecordWithFiles(job, table, target, client, fileClient, targetPath, id, row, true, maxFileBytes); err != nil {
 				st.Errors++
 				errors++
-				log.Printf("[%s→%s] ERROR create %s id=%d: %v", job.Source.Domain, target.Domain, table, id, err)
+				log.Printf("[%s→%s] ERROR create %s id=%d: %v", job.Source.Domain, target.Domain, table.Name, id, err)
 				continue
 			}
 			st.Created++
-			log.Printf("[%s→%s] created %s id=%d", job.Source.Domain, target.Domain, table, id)
+			log.Printf("[%s→%s] created %s id=%d", job.Source.Domain, target.Domain, table.Name, id)
 			continue
 		}
-		if recordsEqual(row, existing) {
+		if recordsEqualIgnoring(row, existing, table.FileFields) {
 			st.Skipped++
 			continue
 		}
-		recordPath := config.RecordPath(target.PathPrefix, table, id)
+		recordPath := config.RecordPath(target.PathPrefix, table.Name, id)
 		if dryRun {
-			log.Printf("[%s→%s] dry-run: would update %s id=%d", job.Source.Domain, target.Domain, table, id)
+			log.Printf("[%s→%s] dry-run: would update %s id=%d", job.Source.Domain, target.Domain, table.Name, id)
+			for _, field := range table.FileFields {
+				if u, err := fileFieldURL(row[field]); err == nil && u != "" {
+					log.Printf("[%s→%s] dry-run: would upload %s id=%d field=%s", job.Source.Domain, target.Domain, table.Name, id, field)
+				}
+			}
 			st.Updated++
 			continue
 		}
-		if err := modifyRecord(client, recordPath, row); err != nil {
+		if err := writeRecordWithFiles(job, table, target, client, fileClient, recordPath, id, row, false, maxFileBytes); err != nil {
 			st.Errors++
 			errors++
-			log.Printf("[%s→%s] ERROR update %s id=%d: %v", job.Source.Domain, target.Domain, table, id, err)
+			log.Printf("[%s→%s] ERROR update %s id=%d: %v", job.Source.Domain, target.Domain, table.Name, id, err)
 			continue
 		}
 		st.Updated++
-		log.Printf("[%s→%s] updated %s id=%d", job.Source.Domain, target.Domain, table, id)
+		log.Printf("[%s→%s] updated %s id=%d", job.Source.Domain, target.Domain, table.Name, id)
 	}
 	return errors
+}
+
+// writeRecordWithFiles writes non-file fields first, then downloads and PATCHes
+// each file field one at a time. create=true uses POST to listPath; otherwise
+// listPath is the record Modify path. On oversize preflight, skips the record
+// entirely (no meta write).
+func writeRecordWithFiles(job config.Job, table config.Table, target config.App, apiClient *bobuild.Client, fileClient *http.Client, listOrRecordPath string, id int, row map[string]any, create bool, maxFileBytes int64) error {
+	if err := preflightFileSizes(fileClient, row, table.FileFields, maxFileBytes); err != nil {
+		return err
+	}
+
+	meta := omitKeys(row, table.FileFields...)
+	if create {
+		if err := createRecord(apiClient, listOrRecordPath, meta); err != nil {
+			return err
+		}
+	} else {
+		if err := modifyRecord(apiClient, listOrRecordPath, meta); err != nil {
+			return err
+		}
+	}
+
+	if len(table.FileFields) == 0 {
+		return nil
+	}
+
+	recordPath := listOrRecordPath
+	if create {
+		recordPath = config.RecordPath(target.PathPrefix, table.Name, id)
+	}
+
+	for _, field := range table.FileFields {
+		rawURL, err := fileFieldURL(row[field])
+		if err != nil {
+			return fmt.Errorf("field %q: %w", field, err)
+		}
+		if rawURL == "" {
+			continue
+		}
+		payload, err := downloadFilePayload(fileClient, field, rawURL, maxFileBytes)
+		if err != nil {
+			return err
+		}
+		if err := modifyRecord(apiClient, recordPath, map[string]any{field: payload}); err != nil {
+			return fmt.Errorf("upload field %q: %w", field, err)
+		}
+		log.Printf("[%s→%s] uploaded %s id=%d field=%s", job.Source.Domain, target.Domain, table.Name, id, field)
+		payload = nil // help GC before next file
+	}
+	return nil
 }
 
 func deleteExtras(job config.Job, table string, sourceRows []map[string]any, target config.App, st *Stats, dryRun bool) int {

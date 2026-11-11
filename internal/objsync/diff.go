@@ -31,6 +31,30 @@ func recordsEqual(a, b map[string]any) bool {
 	return reflect.DeepEqual(normalizeMap(a), normalizeMap(b))
 }
 
+// recordsEqualIgnoring compares payloads after dropping ignore keys (e.g. file fields).
+func recordsEqualIgnoring(a, b map[string]any, ignore []string) bool {
+	return recordsEqual(omitKeys(a, ignore...), omitKeys(b, ignore...))
+}
+
+// omitKeys returns a shallow copy of in without the listed keys.
+func omitKeys(in map[string]any, keys ...string) map[string]any {
+	if len(keys) == 0 {
+		return in
+	}
+	skip := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		skip[k] = struct{}{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if _, ok := skip[k]; ok {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func normalizeMap(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {

@@ -37,6 +37,18 @@ func TestRecordsEqualNormalizesNumbers(t *testing.T) {
 	}
 }
 
+func TestRecordsEqualIgnoringFileFields(t *testing.T) {
+	a := map[string]any{"id": 1, "name": "x", "cover": "https://cdn.example/a.jpg"}
+	b := map[string]any{"id": 1, "name": "x", "cover": "https://cdn.example/b.jpg"}
+	if !recordsEqualIgnoring(a, b, []string{"cover"}) {
+		t.Fatal("expected equal when ignoring differing file URLs")
+	}
+	b["name"] = "y"
+	if recordsEqualIgnoring(a, b, []string{"cover"}) {
+		t.Fatal("expected different when non-file field differs")
+	}
+}
+
 func TestIndexByID(t *testing.T) {
 	rows := []map[string]any{
 		{"id": float64(1), "n": "a"},

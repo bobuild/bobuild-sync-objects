@@ -9,12 +9,17 @@
 #
 # Each job has its own source, tables (FK order), and targets.
 # Failures on one job/table/target do not block the others.
+#
+# max_file_size_mb caps downloaded file/image fields (default 100). Oversized
+# files skip that record (error on stderr) to avoid container OOM.
+# max_file_size_mb: 100
 
 jobs:
   - name: catalog
     tables:
       - category
-      - product
+      - name: product
+        file_fields: [cover, datasheet] # optional; omit for tables without files
     source:
       domain: source.example.com
       api_key: ${SYNC_SOURCE_KEY}
@@ -29,4 +34,3 @@ jobs:
         path_prefix: /sync
         # host: ingress.internal
         # port: "80"
-

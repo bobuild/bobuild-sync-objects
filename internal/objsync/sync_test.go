@@ -8,10 +8,14 @@ import (
 
 func sampleConfig() *config.Config {
 	return &config.Config{
+		MaxFileSizeMB: config.DefaultMaxFileSizeMB,
 		Jobs: []config.Job{
 			{
-				Name:   "catalog",
-				Tables: []string{"category", "product"},
+				Name: "catalog",
+				Tables: []config.Table{
+					{Name: "category"},
+					{Name: "product", FileFields: []string{"cover"}},
+				},
 				Source: config.App{Domain: "source.example.com", APIKey: "s", PathPrefix: "/sync"},
 				Targets: []config.App{
 					{Domain: "a.example.com", APIKey: "a", PathPrefix: "/sync"},
@@ -20,7 +24,7 @@ func sampleConfig() *config.Config {
 			},
 			{
 				Name:   "users",
-				Tables: []string{"user"},
+				Tables: []config.Table{{Name: "user"}},
 				Source: config.App{Domain: "hr.example.com", APIKey: "h", PathPrefix: "/sync"},
 				Targets: []config.App{
 					{Domain: "a.example.com", APIKey: "a2", PathPrefix: "/hr"},

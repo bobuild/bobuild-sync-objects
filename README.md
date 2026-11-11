@@ -13,13 +13,13 @@ For each configured **job**:
 1. Load every listed table from the source (`GET`).
 2. For each target, in table order (respect foreign keys):
    - load the target list (`GET`)
-   - **create** source rows missing on the target (`POST`)
-   - **update** rows whose payload differs (`PATCH /{id}`)
+   - **create** source rows missing on the target (`POST` non-file fields, then per-file `PATCH` uploads)
+   - **update** rows whose non-file payload differs (`PATCH` non-file fields, then per-file uploads)
 3. Then, in **reverse** table order, **delete** target rows whose `id` is not on the source (`DELETE /{id}`).
 
 Source and target must expose the **same JSON field names** (`variable` on the endpoint Fields tab). If the underlying objects use different field names, map them in the Builder — this tool does not remap fields.
 
-Comparison is structural equality of the JSON objects (with light normalization of number types). Identical rows are skipped.
+Comparison is structural equality of the JSON objects (with light normalization of number types), **excluding** configured `file_fields` (signed URLs differ per app). Identical non-file rows are skipped; files are uploaded only when a create or non-file update runs.
 
 Failures on one job, table, or target are isolated; other work continues. The process exits non-zero if any error occurred.
 
@@ -49,6 +49,8 @@ Configure the same set of API variables on source list and target list/create/mo
 
 **Preserve IDs:** map `id` as an accepted field on the target **Create** endpoint so replicas keep the source primary key. Without that, creates get new IDs and the sync cannot match rows.
 
+**File / image fields:** list them under `file_fields` for that table. Map those fields on the target **Modify** endpoint (Create need not require them). List returns temporary URLs; this tool downloads each URL and PATCHes Bobuild’s `{ data: base64, name }` shape [one file at a time](https://docs.bobuild.com/advanced/api/).
+
 Order tables in config so parents are listed before children (creates/updates). Deletes automatically run in reverse order.
 
 ### 3. Optional hardening
@@ -67,11 +69,14 @@ cp config.example.yaml config.yaml
 Do not commit `config.yaml` with secrets.
 
 ```yaml
+max_file_size_mb: 100   # optional; default 100
+
 jobs:
   - name: catalog
     tables:
       - category   # parents first
-      - product
+      - name: product
+        file_fields: [cover, datasheet]
     source:
       domain: source.example.com
       api_key: ${SYNC_SOURCE_KEY}
@@ -84,9 +89,14 @@ jobs:
 
 `api_key` may be a literal string (fine for local use) or `${ENV_VAR}` as the whole value. Each key can use its own env var name. Unset or empty variables fail at startup with a clear error. In containers (e.g. AWS ECS/Fargate), inject secrets as environment variables from Secrets Manager or SSM — one env var per API key referenced in the config.
 
+Optional global:
+- `max_file_size_mb` — max download size per file field (default `100`). Larger files log an error and skip that record (avoids container OOM).
+
 Optional per app:
 - `host` / `port` — dial a cluster ingress over plain HTTP while keeping `domain` as the HTTP Host (default port `80` if only `host` is set)
-- `insecure_skip_verify: true` — skip TLS certificate verification (private CA / broken chain). Prefer fixing trust store; only enable for known endpoints
+- `insecure_skip_verify: true` — skip TLS certificate verification (private CA / broken chain). Prefer fixing trust store; only enable for known endpoints. On the **source** app this also applies to downloading file/image URLs returned by List.
+
+Tables may be a bare name (`category`) or a mapping with `file_fields`.
 
 ## Usage
 
@@ -119,7 +129,8 @@ go build -o bobuild-sync-objects ./cmd/sync
 - Full reconcile only (no incremental / watermark sync).
 - Same API contract on source and target; no field transforms in this tool.
 - Table order for FK safety is your responsibility.
-- File/image fields use a special API shape ([Files and images](https://docs.bobuild.com/advanced/api/)); prefer excluding them from sync endpoints unless both sides handle that format.
+- File/image fields must be listed in `file_fields`; they are ignored in equality checks, so a file-only change on the source is not detected until some non-file field changes (or the row is created).
+- Files are uploaded sequentially (one in memory at a time); oversized files (`max_file_size_mb`) skip the record.
 - Target Create must accept client-supplied `id` for stable replication.
 
 ## License
