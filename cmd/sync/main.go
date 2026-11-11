@@ -33,7 +33,9 @@ func main() {
 		printSummary(stats)
 	}
 	if err != nil {
-		log.Fatalf("%v", err)
+		log.Printf("%v", err)
+		printErrorSummary(stats)
+		os.Exit(1)
 	}
 }
 
@@ -44,6 +46,26 @@ func printSummary(stats []objsync.Stats) {
 		fmt.Fprintf(os.Stderr,
 			"  [%s] %-20s → %-36s table=%-20s source=%d created=%d updated=%d deleted=%d skipped=%d errors=%d\n",
 			s.Job, s.Source, s.Target, s.Table, s.SourceN, s.Created, s.Updated, s.Deleted, s.Skipped, s.Errors,
+		)
+	}
+}
+
+func printErrorSummary(stats []objsync.Stats) {
+	var failed []objsync.Stats
+	for _, s := range stats {
+		if s.Errors > 0 {
+			failed = append(failed, s)
+		}
+	}
+	if len(failed) == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Failed:")
+	for _, s := range failed {
+		fmt.Fprintf(os.Stderr,
+			"  [%s] %s → %s table=%s errors=%d\n",
+			s.Job, s.Source, s.Target, s.Table, s.Errors,
 		)
 	}
 }
